@@ -15,6 +15,7 @@ import (
 
 type ImapState struct {
   nb_messages int
+  unseen_messages int
   up int
 }
 
@@ -30,6 +31,7 @@ type Exporter struct {
 
   up *prometheus.Desc
   nbMessages prometheus.Gauge
+  unseenMessages prometheus.Gauge
 }
 
 func NewExporter(mailserver, username, password string, mailbox string, minQueryInterval time.Duration) *Exporter {
@@ -47,15 +49,22 @@ func NewExporter(mailserver, username, password string, mailbox string, minQuery
       nil),
     nbMessages: prometheus.NewGauge(prometheus.GaugeOpts{
       Namespace: "imap",
-      Name: "nb_messages_in_mailbox",
+      Name: "num_messages",
       Help: "Current number of messages in mailbox",
     }),
+    unseenMessages: prometheus.NewGauge(prometheus.GaugeOpts{
+      Namespace: "imap",
+      Name: "unseen_messages",
+      Help: "Current number of unseen messages in mailbox",
+    }),
+
   }
 }
 
 func (exp *Exporter) Describe(ch chan<- *prometheus.Desc) {
   ch <- exp.up
   exp.nbMessages.Describe(ch)
+  exp.unseenMessages.Describe(ch)
 }
 
 func (exp *Exporter) queryImapServer() ImapState {
@@ -68,7 +77,7 @@ func (exp *Exporter) queryImapServer() ImapState {
   )
 
   // Connect to the server
-  client, err = imap.Dial(exp.mailserver)
+  client, err = imap.DialTLS(exp.mailserver, nil)
   if err != nil {
     state.up = 0
     return state
@@ -81,7 +90,7 @@ func (exp *Exporter) queryImapServer() ImapState {
   if client.Caps["STARTTLS"] {
     client.StartTLS(nil)
   } else {
-    log.Fatal("IMAP server does not support encryption!")
+//    log.Fatal("IMAP server does not support encryption!")
   }
 
   // Authenticate
@@ -96,6 +105,7 @@ func (exp *Exporter) queryImapServer() ImapState {
 
   state.up = 1
   state.nb_messages = int(client.Mailbox.Messages)
+  state.unseen_messages = int(client.Mailbox.Unseen)
 
   return state
 }
@@ -110,8 +120,10 @@ func (exp *Exporter) collect(ch chan<- prometheus.Metric) error {
 
   exp.nbMessages.Set(float64(state.nb_messages))
   exp.nbMessages.Collect(ch)
-  ch <- prometheus.MustNewConstMetric(exp.up, prometheus.GaugeValue, float64(state.up))
+  exp.unseenMessages.Set(float64(state.unseen_messages))
+  exp.unseenMessages.Collect(ch)
 
+  ch <- prometheus.MustNewConstMetric(exp.up, prometheus.GaugeValue, float64(state.up))
   return nil
 }
 
